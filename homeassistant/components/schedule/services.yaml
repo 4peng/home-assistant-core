@@ -3,3 +3,31 @@ get_schedule:
   target:
     entity:
       domain: schedule
+set_override:
+  target:
+    entity:
+      domain: schedule
+  fields:
+    state:
+      required: true
+      selector:
+        select:
+          options:
+            - "on"
+            - "off"
+    until:
+      required: false
+      selector:
+        datetime:
+    duration:
+      required: false
+      selector:
+        duration:
+    reason:
+      required: false
+      selector:
+        text:
+clear_override:
+  target:
+    entity:
+      domain: schedule
