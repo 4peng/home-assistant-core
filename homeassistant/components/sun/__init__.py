@@ -52,7 +52,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: SunConfigEntry) -> bool:
     """Set up from a config entry."""
-    sun = Sun(hass)
+    sun = Sun(hass, entry)
     component = EntityComponent[Sun](_LOGGER, DOMAIN, hass)
     await component.async_add_entities([sun])
     entry.runtime_data = sun
