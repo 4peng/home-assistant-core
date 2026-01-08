@@ -22,7 +22,14 @@ async def _async_reproduce_state(
     context: Context | None = None,
     reproduce_options: dict[str, Any] | None = None,
 ) -> None:
-    """Reproduce a single state."""
+    """Reproduce a single state.
+
+    Args:
+        hass (HomeAssistant): Home Assistant instance.
+        state (State): State to reproduce.
+        context (Context | None): Context.
+        reproduce_options (dict[str, Any] | None): Reproduction options.
+    """
     # Return if we can't find the entity
     if (cur_state := hass.states.get(state.entity_id)) is None:
         _LOGGER.warning("Unable to find entity %s", state.entity_id)
@@ -48,7 +55,14 @@ async def async_reproduce_states(
     context: Context | None = None,
     reproduce_options: dict[str, Any] | None = None,
 ) -> None:
-    """Reproduce Input text states."""
+    """Reproduce Input text states.
+
+    Args:
+        hass (HomeAssistant): Home Assistant instance.
+        states (Iterable[State]): States to reproduce.
+        context (Context | None): Context.
+        reproduce_options (dict[str, Any] | None): Reproduction options.
+    """
     # Reproduce states in parallel.
     await asyncio.gather(
         *(
