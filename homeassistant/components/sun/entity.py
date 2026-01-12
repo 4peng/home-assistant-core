@@ -9,64 +9,47 @@ from typing import Any
 from astral.location import Elevation, Location
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    EVENT_CORE_CONFIG_UPDATE,
-    SUN_EVENT_SUNRISE,
-    SUN_EVENT_SUNSET,
-)
+from homeassistant.const import EVENT_CORE_CONFIG_UPDATE
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import event
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.entity import Entity
-from homeassistant.helpers.sun import (
-    get_astral_location,
-    get_location_astral_event_next,
-)
+from homeassistant.helpers.sun import get_astral_location
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_ELEVATION_UPDATE_INTERVAL,
+    PHASE_ASTRONOMICAL_TWILIGHT,
+    PHASE_DAY,
+    PHASE_NAUTICAL_TWILIGHT,
+    PHASE_NIGHT,
+    PHASE_SMALL_DAY,
+    PHASE_TWILIGHT,
     SIGNAL_EVENTS_CHANGED,
     SIGNAL_POSITION_CHANGED,
     STATE_ABOVE_HORIZON,
+    STATE_ATTR_AZIMUTH,
+    STATE_ATTR_ELEVATION,
+    STATE_ATTR_NEXT_BLUE_HOUR_END,
+    STATE_ATTR_NEXT_BLUE_HOUR_START,
+    STATE_ATTR_NEXT_DAWN,
+    STATE_ATTR_NEXT_DUSK,
+    STATE_ATTR_NEXT_GOLDEN_HOUR_END,
+    STATE_ATTR_NEXT_GOLDEN_HOUR_START,
+    STATE_ATTR_NEXT_MIDNIGHT,
+    STATE_ATTR_NEXT_NOON,
+    STATE_ATTR_NEXT_RISING,
+    STATE_ATTR_NEXT_SETTING,
+    STATE_ATTR_RISING,
     STATE_BELOW_HORIZON,
 )
+from .util import get_sun_state
 
 type SunConfigEntry = ConfigEntry[Sun]
 
 _LOGGER = logging.getLogger(__name__)
 
 ENTITY_ID = "sun.sun"
-
-STATE_ATTR_AZIMUTH = "azimuth"
-STATE_ATTR_ELEVATION = "elevation"
-STATE_ATTR_RISING = "rising"
-STATE_ATTR_NEXT_DAWN = "next_dawn"
-STATE_ATTR_NEXT_DUSK = "next_dusk"
-STATE_ATTR_NEXT_MIDNIGHT = "next_midnight"
-STATE_ATTR_NEXT_NOON = "next_noon"
-STATE_ATTR_NEXT_RISING = "next_rising"
-STATE_ATTR_NEXT_SETTING = "next_setting"
-
-# The algorithm used here is somewhat complicated. It aims to cut down
-# the number of sensor updates over the day. It's documented best in
-# the PR for the change, see the Discussion section of:
-# https://github.com/home-assistant/core/pull/23832
-
-
-# As documented in wikipedia: https://en.wikipedia.org/wiki/Twilight
-# sun is:
-# < -18° of horizon - all stars visible
-PHASE_NIGHT = "night"
-# 18°-12° - some stars not visible
-PHASE_ASTRONOMICAL_TWILIGHT = "astronomical_twilight"
-# 12°-6° - horizon visible
-PHASE_NAUTICAL_TWILIGHT = "nautical_twilight"
-# 6°-0° - objects visible
-PHASE_TWILIGHT = "twilight"
-# 0°-10° above horizon, sun low on horizon
-PHASE_SMALL_DAY = "small_day"
-# > 10° above horizon
-PHASE_DAY = "day"
 
 # 4 mins is one degree of arc change of the sun on its circle.
 # During the night and the middle of the day we don't update
@@ -95,6 +78,10 @@ class Sun(Entity):
             STATE_ATTR_NEXT_NOON,
             STATE_ATTR_NEXT_RISING,
             STATE_ATTR_NEXT_SETTING,
+            STATE_ATTR_NEXT_GOLDEN_HOUR_START,
+            STATE_ATTR_NEXT_GOLDEN_HOUR_END,
+            STATE_ATTR_NEXT_BLUE_HOUR_START,
+            STATE_ATTR_NEXT_BLUE_HOUR_END,
         }
     )
 
@@ -113,10 +100,15 @@ class Sun(Entity):
     solar_azimuth: float
     rising: bool
     _next_change: datetime
+    next_golden_hour_start: datetime | None
+    next_golden_hour_end: datetime | None
+    next_blue_hour_start: datetime | None
+    next_blue_hour_end: datetime | None
 
-    def __init__(self, hass: HomeAssistant) -> None:
+    def __init__(self, hass: HomeAssistant, entry: SunConfigEntry | None = None) -> None:
         """Initialize the sun."""
         self.hass = hass
+        self.entry = entry
         self.phase: str | None = None
 
         self._config_listener: CALLBACK_TYPE | None = None
@@ -165,7 +157,7 @@ class Sun(Entity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes of the sun."""
-        return {
+        data = {
             STATE_ATTR_NEXT_DAWN: self.next_dawn.isoformat(),
             STATE_ATTR_NEXT_DUSK: self.next_dusk.isoformat(),
             STATE_ATTR_NEXT_MIDNIGHT: self.next_midnight.isoformat(),
@@ -176,74 +168,44 @@ class Sun(Entity):
             STATE_ATTR_AZIMUTH: self.solar_azimuth,
             STATE_ATTR_RISING: self.rising,
         }
-
-    def _check_event(
-        self, utc_point_in_time: datetime, sun_event: str, before: str | None
-    ) -> datetime:
-        next_utc = get_location_astral_event_next(
-            self.location, self.elevation, sun_event, utc_point_in_time
-        )
-        if next_utc < self._next_change:
-            self._next_change = next_utc
-            self.phase = before
-        return next_utc
+        if self.next_golden_hour_start:
+            data[STATE_ATTR_NEXT_GOLDEN_HOUR_START] = (
+                self.next_golden_hour_start.isoformat()
+            )
+        if self.next_golden_hour_end:
+            data[STATE_ATTR_NEXT_GOLDEN_HOUR_END] = (
+                self.next_golden_hour_end.isoformat()
+            )
+        if self.next_blue_hour_start:
+            data[STATE_ATTR_NEXT_BLUE_HOUR_START] = (
+                self.next_blue_hour_start.isoformat()
+            )
+        if self.next_blue_hour_end:
+            data[STATE_ATTR_NEXT_BLUE_HOUR_END] = self.next_blue_hour_end.isoformat()
+        return data
 
     @callback
     def update_events(self, now: datetime | None = None) -> None:
         """Update the attributes containing solar events."""
         # Grab current time in case system clock changed since last time we ran.
         utc_point_in_time = dt_util.utcnow()
-        self._next_change = utc_point_in_time + timedelta(days=400)
+        
+        sun_state = get_sun_state(self.location, self.elevation, utc_point_in_time)
 
-        # Work our way around the solar cycle, figure out the next
-        # phase. Some of these are stored.
-        self.location.solar_depression = "astronomical"
-        self._check_event(utc_point_in_time, "dawn", PHASE_NIGHT)
-        self.location.solar_depression = "nautical"
-        self._check_event(utc_point_in_time, "dawn", PHASE_ASTRONOMICAL_TWILIGHT)
-        self.location.solar_depression = "civil"
-        self.next_dawn = self._check_event(
-            utc_point_in_time, "dawn", PHASE_NAUTICAL_TWILIGHT
-        )
-        self.next_rising = self._check_event(
-            utc_point_in_time, SUN_EVENT_SUNRISE, PHASE_TWILIGHT
-        )
-        self.location.solar_depression = -10
-        self._check_event(utc_point_in_time, "dawn", PHASE_SMALL_DAY)
-        self.next_noon = self._check_event(utc_point_in_time, "noon", None)
-        self._check_event(utc_point_in_time, "dusk", PHASE_DAY)
-        self.next_setting = self._check_event(
-            utc_point_in_time, SUN_EVENT_SUNSET, PHASE_SMALL_DAY
-        )
-        self.location.solar_depression = "civil"
-        self.next_dusk = self._check_event(utc_point_in_time, "dusk", PHASE_TWILIGHT)
-        self.location.solar_depression = "nautical"
-        self._check_event(utc_point_in_time, "dusk", PHASE_NAUTICAL_TWILIGHT)
-        self.location.solar_depression = "astronomical"
-        self._check_event(utc_point_in_time, "dusk", PHASE_ASTRONOMICAL_TWILIGHT)
-        self.next_midnight = self._check_event(utc_point_in_time, "midnight", None)
-        self.location.solar_depression = "civil"
-
-        # if the event was solar midday or midnight, phase will now
-        # be None. Solar noon doesn't always happen when the sun is
-        # even in the day at the poles, so we can't rely on it.
-        # Need to calculate phase if next is noon or midnight
-        if self.phase is None:
-            elevation = self.location.solar_elevation(self._next_change, self.elevation)
-            if elevation >= 10:
-                self.phase = PHASE_DAY
-            elif elevation >= 0:
-                self.phase = PHASE_SMALL_DAY
-            elif elevation >= -6:
-                self.phase = PHASE_TWILIGHT
-            elif elevation >= -12:
-                self.phase = PHASE_NAUTICAL_TWILIGHT
-            elif elevation >= -18:
-                self.phase = PHASE_ASTRONOMICAL_TWILIGHT
-            else:
-                self.phase = PHASE_NIGHT
-
-        self.rising = self.next_noon < self.next_midnight
+        self.next_dawn = sun_state.next_dawn
+        self.next_dusk = sun_state.next_dusk
+        self.next_midnight = sun_state.next_midnight
+        self.next_noon = sun_state.next_noon
+        self.next_rising = sun_state.next_rising
+        self.next_setting = sun_state.next_setting
+        self.phase = sun_state.phase
+        self.rising = sun_state.rising
+        self._next_change = sun_state.next_change
+        
+        self.next_golden_hour_start = sun_state.next_golden_hour_start
+        self.next_golden_hour_end = sun_state.next_golden_hour_end
+        self.next_blue_hour_start = sun_state.next_blue_hour_start
+        self.next_blue_hour_end = sun_state.next_blue_hour_end
 
         _LOGGER.debug(
             "sun phase_update@%s: phase=%s", utc_point_in_time.isoformat(), self.phase
@@ -252,6 +214,16 @@ class Sun(Entity):
             self._update_sun_position_listener()
         self.update_sun_position()
         async_dispatcher_send(self.hass, SIGNAL_EVENTS_CHANGED)
+
+        # Safety guard: Ensure next change is in the future
+        # to prevent infinite loops (Time Travel Bug)
+        if self._next_change <= utc_point_in_time:
+             self._next_change = utc_point_in_time + timedelta(seconds=10)
+             _LOGGER.warning(
+                 "Solar event calculation loop protection enabled, next change: %s, now: %s",
+                 self._next_change,
+                 utc_point_in_time,
+             )
 
         # Set timer for the next solar event
         self._update_events_listener = event.async_track_point_in_utc_time(
@@ -281,9 +253,17 @@ class Sun(Entity):
 
         async_dispatcher_send(self.hass, SIGNAL_POSITION_CHANGED)
 
-        # Next update as per the current phase
-        assert self.phase
-        delta = _PHASE_UPDATES[self.phase]
+        update_interval = None
+        if self.entry:
+            update_interval = self.entry.options.get(CONF_ELEVATION_UPDATE_INTERVAL)
+            
+        if update_interval is not None:
+            delta = timedelta(seconds=update_interval)
+        else:
+            # Next update as per the current phase
+            assert self.phase
+            delta = _PHASE_UPDATES[self.phase]
+
         # if the next update is within 1.25 of the next
         # position update just drop it
         if utc_point_in_time + delta * 1.25 > self._next_change:
