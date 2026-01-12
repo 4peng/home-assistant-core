@@ -24,6 +24,7 @@ from homeassistant.helpers.issue_registry import (
     async_delete_issue,
 )
 from homeassistant.helpers.typing import StateType
+from homeassistant.util import dt as dt_util  # Added for time calculation
 
 from .const import DOMAIN, SIGNAL_EVENTS_CHANGED, SIGNAL_POSITION_CHANGED
 from .entity import Sun, SunConfigEntry
@@ -150,6 +151,25 @@ class SunSensor(SensorEntity):
     def native_value(self) -> StateType | datetime:
         """Return value of sensor."""
         return self.entity_description.value_fn(self.sun)
+
+    @property
+    def extra_state_attributes(self):
+        """Return the state attributes with time remaining calculation."""
+        # Check if the current value is a datetime object (for dawn/dusk/etc sensors)
+        val = self.native_value
+        if isinstance(val, datetime):
+            now = dt_util.utcnow()
+            # Calculate time difference
+            if val > now:
+                diff = val - now
+                hours, remainder = divmod(diff.seconds, 3600)
+                minutes, _ = divmod(remainder, 60)
+                return {
+                    "time_remaining": f"{hours}h {minutes}m"
+                }
+            elif val <= now:
+                 return { "time_remaining": "Passed" }
+        return {}
 
     async def async_added_to_hass(self) -> None:
         """Register signal listener when added to hass."""
