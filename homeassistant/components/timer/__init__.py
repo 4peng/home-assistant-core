@@ -27,6 +27,14 @@ import homeassistant.helpers.service
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType, VolDictType
 from homeassistant.util import dt as dt_util
+from .override import TimerOverride
+from .shift_pattern import ShiftPattern
+
+from datetime import time
+from typing import TypeVar
+
+_T = TypeVar("_T")
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -61,6 +69,7 @@ SERVICE_PAUSE = "pause"
 SERVICE_CANCEL = "cancel"
 SERVICE_CHANGE = "change"
 SERVICE_FINISH = "finish"
+SERVICE_SET_OVERRIDE = "set_override"
 
 STORAGE_KEY = DOMAIN
 STORAGE_VERSION = 1
@@ -80,11 +89,11 @@ def _format_timedelta(delta: timedelta) -> str:
     return f"{int(hours)}:{int(minutes):02}:{int(seconds):02}"
 
 
-def _none_to_empty_dict[_T](value: _T | None) -> _T | dict[Any, Any]:
+def _none_to_empty_dict(value: _T | None) -> _T | dict[Any, Any]:
+    """Convert None to empty dict, otherwise return value."""
     if value is None:
         return {}
     return value
-
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -166,6 +175,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         {vol.Optional(ATTR_DURATION, default=DEFAULT_DURATION): cv.time_period},
         "async_change",
     )
+    component.async_register_entity_service(
+        SERVICE_SET_OVERRIDE,
+        {vol.Optional("state"): vol.In([STATUS_ACTIVE, STATUS_PAUSED, STATUS_IDLE]),vol.Optional("remaining"): cv.time_period,},"async_set_override",
+)
 
     return True
 
@@ -203,6 +216,11 @@ class Timer(collection.CollectionEntity, RestoreEntity):
 
     def __init__(self, config: ConfigType) -> None:
         """Initialize a timer."""
+        self._override = TimerOverride()
+        self._shift_pattern = ShiftPattern(
+            start=time(9, 0),
+            end=time(18, 0),
+        )
         self._config: dict = config
         self._state: str = STATUS_IDLE
         self._configured_duration = cv.time_period_str(config[CONF_DURATION])
@@ -211,7 +229,6 @@ class Timer(collection.CollectionEntity, RestoreEntity):
         self._end: datetime | None = None
         self._listener: Callable[[], None] | None = None
         self._restore: bool = self._config.get(CONF_RESTORE, DEFAULT_RESTORE)
-
         self._attr_should_poll = False
         self._attr_force_update = True
 
@@ -304,6 +321,12 @@ class Timer(collection.CollectionEntity, RestoreEntity):
     @callback
     def async_start(self, duration: timedelta | None = None) -> None:
         """Start a timer."""
+        if self._shift_pattern and not self._shift_pattern.is_active(
+            dt_util.utcnow()
+        ):
+            _LOGGER.debug("Timer start blocked by shift pattern")
+            return
+        
         if self._listener:
             self._listener()
             self._listener = None
@@ -414,6 +437,8 @@ class Timer(collection.CollectionEntity, RestoreEntity):
     @callback
     def _async_finished(self, time: datetime) -> None:
         """Reset and updates the states, fire finished event."""
+        if self._override.active:
+            return
         if self._state != STATUS_ACTIVE or self._end is None:
             return
 
@@ -428,6 +453,30 @@ class Timer(collection.CollectionEntity, RestoreEntity):
             EVENT_TIMER_FINISHED,
             {ATTR_ENTITY_ID: self.entity_id, ATTR_FINISHED_AT: end.isoformat()},
         )
+        
+    @callback
+    def async_set_override(
+        self,
+        state: str | None = None,
+        remaining: timedelta | None = None,
+    ) -> None:
+        """Manually override timer state."""
+        self._override.active = True
+        self._override.forced_state = state
+        self._override.forced_remaining = remaining
+
+        if remaining:
+            self._remaining = remaining
+
+        if state == STATUS_PAUSED:
+            self.async_pause()
+        elif state == STATUS_ACTIVE:
+            self.async_start()
+        elif state == STATUS_IDLE:
+            self.async_cancel()
+
+        self.async_write_ha_state()
+    
 
     async def async_update_config(self, config: ConfigType) -> None:
         """Handle when the config is updated."""
