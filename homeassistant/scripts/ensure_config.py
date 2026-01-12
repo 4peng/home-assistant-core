@@ -7,8 +7,6 @@ import os
 from homeassistant import config as config_util
 from homeassistant.core import HomeAssistant
 
-# mypy: allow-untyped-calls, allow-untyped-defs
-
 
 def run(args):
     """Handle ensure config commandline script."""
@@ -26,16 +24,19 @@ def run(args):
 
     args = parser.parse_args()
 
-    config_dir = os.path.join(os.getcwd(), args.config)
-
-    # Test if configuration directory exists
-    if not os.path.isdir(config_dir):
-        print("Creating directory", config_dir)
-        os.makedirs(config_dir, exist_ok=True)
+    config_dir = _ensure_config_dir(os.path.join(os.getcwd(), args.config))
 
     config_path = asyncio.run(async_run(config_dir))
     print("Configuration file:", config_path)
     return 0
+
+
+def _ensure_config_dir(config_dir: str) -> str:
+    """Ensure that the configuration directory exists, creating it if necessary."""
+    if not os.path.isdir(config_dir):
+        print("Creating directory", config_dir)
+        os.makedirs(config_dir, exist_ok=True)
+    return config_dir
 
 
 async def async_run(config_dir):
