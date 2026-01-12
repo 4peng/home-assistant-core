@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import asyncio
+from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import logging
@@ -97,7 +98,7 @@ from .const import (
     LOGGER,
 )
 from .helpers import async_get_blueprints
-from .trace import trace_automation
+from .trace import PerformanceTimer, trace_automation
 
 DATA_COMPONENT: HassKey[EntityComponent[BaseAutomationEntity]] = HassKey(DOMAIN)
 ENTITY_ID_FORMAT = DOMAIN + ".{}"
@@ -561,17 +562,59 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
         self._trace_config = trace_config
         self._attr_unique_id = automation_id
 
+        # Execution statistics
+        self._execution_count: int = 0
+        self._success_count: int = 0
+        self._failure_count: int = 0
+        self._condition_failed_count: int = 0
+        self._total_execution_time: float = 0.0
+        self._execution_history: deque = deque(maxlen=10)
+
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the entity state attributes."""
-        attrs = {
+        attrs: dict[str, Any] = {
             ATTR_LAST_TRIGGERED: self.action_script.last_triggered,
             ATTR_MODE: self.action_script.script_mode,
             ATTR_CUR: self.action_script.runs,
         }
         if self.action_script.supports_max:
             attrs[ATTR_MAX] = self.action_script.max_runs
+        # Add execution statistics
+        attrs.update(
+            {
+                "execution_count": self._execution_count,
+                "success_count": self._success_count,
+                "failure_count": self._failure_count,
+                "condition_failed_count": self._condition_failed_count,
+                "success_rate": round(self._get_success_rate(), 1),
+                "average_execution_time": round(self._get_avg_execution_time(), 3),
+                "execution_history": list(self._execution_history),
+            }
+        )
         return attrs
+
+    def _get_success_rate(self) -> float:
+        """Calculate success rate percentage.
+
+        Returns:
+            Success rate as a percentage (0-100)
+
+        """
+        if self._execution_count == 0:
+            return 0.0
+        return (self._success_count / self._execution_count) * 100
+
+    def _get_avg_execution_time(self) -> float:
+        """Calculate average execution time.
+
+        Returns:
+            Average execution time in seconds
+
+        """
+        if self._success_count == 0:
+            return 0.0
+        return self._total_execution_time / self._success_count
 
     @property
     def is_on(self) -> bool:
@@ -687,10 +730,17 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
         context: Context | None = None,
         skip_condition: bool = False,
     ) -> ScriptRunResult | None:
-        """Trigger automation.
+        """Trigger automation with performance tracking and statistics.
 
         This method is a coroutine.
         """
+        # Create performance timer
+        perf_timer = PerformanceTimer()
+        perf_timer.start()
+
+        # Update statistics
+        self._execution_count += 1
+
         reason = ""
         alias = ""
         if "trigger" in run_variables:
@@ -698,7 +748,11 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
                 reason = f" by {run_variables['trigger']['description']}"
             if "alias" in run_variables["trigger"]:
                 alias = f" trigger '{run_variables['trigger']['alias']}'"
+
+        # Time trigger handling
+        perf_timer.start_step("trigger_handling")
         self._logger.debug("Automation%s triggered%s", alias, reason)
+        perf_timer.end_step("trigger_handling")
 
         # Create a new context referring to the old context.
         parent_id = None if context is None else context.id
@@ -722,6 +776,19 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
                 except TemplateError as err:
                     self._logger.error("Error rendering variables: %s", err)
                     automation_trace.set_error(err)
+                    self._failure_count += 1
+                    total_time = perf_timer.get_total_time() or 0
+                    self._execution_history.append(
+                        {
+                            "timestamp": self.action_script.last_triggered,
+                            "result": "error",
+                            "duration": total_time,
+                            "trigger": reason.replace(" by ", "")
+                            if reason
+                            else "unknown",
+                            "error": str(err),
+                        }
+                    )
                     return None
 
             # Prepare tracing the automation
@@ -739,17 +806,42 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
             trace_element = TraceElement(variables, trigger_path)
             trace_append_element(trace_element)
 
-            if (
-                not skip_condition
-                and self._cond_func is not None
-                and not self._cond_func(variables)
-            ):
-                self._logger.debug(
-                    "Conditions not met, aborting automation. Condition summary: %s",
-                    trace_get(clear=False),
-                )
-                script_execution_set("failed_conditions")
-                return None
+            # Time condition evaluation
+            if not skip_condition and self._cond_func is not None:
+                perf_timer.start_step("condition_check")
+                cond_result = self._cond_func(variables)
+                cond_duration = perf_timer.end_step("condition_check")
+
+                if not cond_result:
+                    # Condition failed - update statistics
+                    self._condition_failed_count += 1
+                    total_time = perf_timer.get_total_time() or 0
+
+                    self._execution_history.append(
+                        {
+                            "timestamp": self.action_script.last_triggered,
+                            "result": "condition_failed",
+                            "duration": total_time,
+                            "trigger": reason.replace(" by ", "")
+                            if reason
+                            else "unknown",
+                        }
+                    )
+
+                    self._logger.debug(
+                        "Conditions not met, aborting automation (condition: %.3fs, total: %.3fs) "
+                        "[Stats: %d total, %d condition failures]. Condition summary: %s",
+                        cond_duration or 0,
+                        total_time,
+                        self._execution_count,
+                        self._condition_failed_count,
+                        trace_get(clear=False),
+                    )
+                    script_execution_set("failed_conditions")
+                    return None
+
+            # Time action execution
+            perf_timer.start_step("action_execution")
 
             self.async_set_context(trigger_context)
             event_data = {
@@ -774,10 +866,26 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
 
             try:
                 with trace_path("action"):
-                    return await self.action_script.async_run(
+                    result = await self.action_script.async_run(
                         variables, trigger_context, started_action
                     )
+
             except ServiceNotFound as err:
+                # Action failed - service not found
+                self._failure_count += 1
+                action_duration = perf_timer.end_step("action_execution")
+                total_time = perf_timer.get_total_time() or 0
+
+                self._execution_history.append(
+                    {
+                        "timestamp": self.action_script.last_triggered,
+                        "result": "failed",
+                        "duration": total_time,
+                        "trigger": reason.replace(" by ", "") if reason else "unknown",
+                        "error": f"{err.domain}.{err.service}",
+                    }
+                )
+
                 async_create_issue(
                     self.hass,
                     DOMAIN,
@@ -794,18 +902,98 @@ class AutomationEntity(BaseAutomationEntity, RestoreEntity):
                     },
                 )
                 automation_trace.set_error(err)
+                return None
+
             except (vol.Invalid, HomeAssistantError) as err:
+                # Action failed - general error
+                self._failure_count += 1
+                action_duration = perf_timer.end_step("action_execution")
+                total_time = perf_timer.get_total_time() or 0
+
+                self._execution_history.append(
+                    {
+                        "timestamp": self.action_script.last_triggered,
+                        "result": "error",
+                        "duration": total_time,
+                        "trigger": reason.replace(" by ", "") if reason else "unknown",
+                        "error": str(err),
+                    }
+                )
+
                 self._logger.error(
-                    "Error while executing automation %s: %s",
+                    "Error while executing automation %s after %.3fs: %s "
+                    "[Stats: %d total, %d failed, %.1f%% success rate]",
                     self.entity_id,
+                    total_time,
                     err,
+                    self._execution_count,
+                    self._failure_count,
+                    self._get_success_rate(),
                 )
                 automation_trace.set_error(err)
-            except Exception as err:
-                self._logger.exception("While executing automation %s", self.entity_id)
-                automation_trace.set_error(err)
+                return None
 
-            return None
+            except Exception as err:
+                # Action failed - unexpected error
+                self._failure_count += 1
+                action_duration = perf_timer.end_step("action_execution")
+                total_time = perf_timer.get_total_time() or 0
+
+                self._execution_history.append(
+                    {
+                        "timestamp": self.action_script.last_triggered,
+                        "result": "error",
+                        "duration": total_time,
+                        "trigger": reason.replace(" by ", "") if reason else "unknown",
+                        "error": str(err),
+                    }
+                )
+
+                self._logger.exception(
+                    "While executing automation %s after %.3fs "
+                    "[Stats: %d total, %d failed, %.1f%% success rate]",
+                    self.entity_id,
+                    total_time,
+                    self._execution_count,
+                    self._failure_count,
+                    self._get_success_rate(),
+                )
+                automation_trace.set_error(err)
+                return None
+
+            else:
+                # Action execution successful
+                action_duration = perf_timer.end_step("action_execution")
+                self._success_count += 1
+                metrics = perf_timer.get_metrics()
+                total_time = metrics.get("total", 0)
+                self._total_execution_time += total_time
+
+                self._execution_history.append(
+                    {
+                        "timestamp": self.action_script.last_triggered,
+                        "result": "success",
+                        "duration": total_time,
+                        "trigger": reason.replace(" by ", "") if reason else "unknown",
+                    }
+                )
+
+                self._logger.info(
+                    "Automation '%s' completed in %.3fs "
+                    "(trigger: %.3fs, condition: %.3fs, action: %.3fs) "
+                    "[Stats: %d total, %d success, %.1f%% success rate, avg: %.3fs]",
+                    self.name,
+                    total_time,
+                    metrics.get("trigger_handling", 0),
+                    metrics.get("condition_check", 0),
+                    action_duration or 0,
+                    self._execution_count,
+                    self._success_count,
+                    self._get_success_rate(),
+                    self._get_avg_execution_time(),
+                )
+
+                return result
 
     async def async_will_remove_from_hass(self) -> None:
         """Remove listeners when removing automation from Home Assistant."""
