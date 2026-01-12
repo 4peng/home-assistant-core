@@ -30,6 +30,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
+# 1. REENGINEERING: Added Type Hints to constants
 CONDITION_CLASSES: dict[str, list[str]] = {
     ATTR_CONDITION_CLOUDY: [],
     ATTR_CONDITION_FOG: [],
@@ -46,13 +47,55 @@ CONDITION_CLASSES: dict[str, list[str]] = {
     ATTR_CONDITION_WINDY_VARIANT: [],
     ATTR_CONDITION_EXCEPTIONAL: [],
 }
-CONDITION_MAP = {
+
+CONDITION_MAP: dict[str, str] = {
     cond_code: cond_ha
     for cond_ha, cond_codes in CONDITION_CLASSES.items()
     for cond_code in cond_codes
 }
 
 WEATHER_UPDATE_INTERVAL = timedelta(minutes=30)
+
+# 2. REENGINEERING: Refactored "Magic Lists" into named Constants
+SOUTH_DAILY_FORECAST: list[list] = [
+    [ATTR_CONDITION_RAINY, 1, 22, 15, 60],
+    [ATTR_CONDITION_RAINY, 5, 19, 8, 30],
+    [ATTR_CONDITION_CLOUDY, 0, 15, 9, 10],
+    [ATTR_CONDITION_SUNNY, 0, 12, 6, 0],
+    [ATTR_CONDITION_PARTLYCLOUDY, 2, 14, 7, 20],
+    [ATTR_CONDITION_RAINY, 15, 18, 7, 0],
+    [ATTR_CONDITION_FOG, 0.2, 21, 12, 100],
+]
+
+NORTH_DAILY_FORECAST: list[list] = [
+    [ATTR_CONDITION_SNOWY, 2, -10, -15, 60],
+    [ATTR_CONDITION_PARTLYCLOUDY, 1, -13, -14, 25],
+    [ATTR_CONDITION_SUNNY, 0, -18, -22, 70],
+    [ATTR_CONDITION_SUNNY, 0.1, -23, -23, 90],
+    [ATTR_CONDITION_SNOWY, 4, -19, -20, 40],
+    [ATTR_CONDITION_SUNNY, 0.3, -14, -19, 0],
+    [ATTR_CONDITION_SUNNY, 0, -9, -12, 0],
+]
+
+NORTH_HOURLY_FORECAST: list[list] = [
+    [ATTR_CONDITION_SUNNY, 2, -10, -15, 60],
+    [ATTR_CONDITION_SUNNY, 1, -13, -14, 25],
+    [ATTR_CONDITION_SUNNY, 0, -18, -22, 70],
+    [ATTR_CONDITION_SUNNY, 0.1, -23, -23, 90],
+    [ATTR_CONDITION_SUNNY, 4, -19, -20, 40],
+    [ATTR_CONDITION_SUNNY, 0.3, -14, -19, 0],
+    [ATTR_CONDITION_SUNNY, 0, -9, -12, 0],
+]
+
+NORTH_TWICE_DAILY_FORECAST: list[list] = [
+    [ATTR_CONDITION_SNOWY, 2, -10, -15, 60, True],
+    [ATTR_CONDITION_PARTLYCLOUDY, 1, -13, -14, 25, False],
+    [ATTR_CONDITION_SUNNY, 0, -18, -22, 70, True],
+    [ATTR_CONDITION_SUNNY, 0.1, -23, -23, 90, False],
+    [ATTR_CONDITION_SNOWY, 4, -19, -20, 40, True],
+    [ATTR_CONDITION_SUNNY, 0.3, -14, -19, 0, False],
+    [ATTR_CONDITION_SUNNY, 0, -9, -12, 0, True],
+]
 
 
 async def async_setup_entry(
@@ -73,15 +116,7 @@ async def async_setup_entry(
                 UnitOfTemperature.CELSIUS,
                 UnitOfPressure.HPA,
                 UnitOfSpeed.METERS_PER_SECOND,
-                [
-                    [ATTR_CONDITION_RAINY, 1, 22, 15, 60],
-                    [ATTR_CONDITION_RAINY, 5, 19, 8, 30],
-                    [ATTR_CONDITION_CLOUDY, 0, 15, 9, 10],
-                    [ATTR_CONDITION_SUNNY, 0, 12, 6, 0],
-                    [ATTR_CONDITION_PARTLYCLOUDY, 2, 14, 7, 20],
-                    [ATTR_CONDITION_RAINY, 15, 18, 7, 0],
-                    [ATTR_CONDITION_FOG, 0.2, 21, 12, 100],
-                ],
+                SOUTH_DAILY_FORECAST,
                 None,
                 None,
             ),
@@ -95,43 +130,24 @@ async def async_setup_entry(
                 UnitOfTemperature.FAHRENHEIT,
                 UnitOfPressure.INHG,
                 UnitOfSpeed.MILES_PER_HOUR,
-                [
-                    [ATTR_CONDITION_SNOWY, 2, -10, -15, 60],
-                    [ATTR_CONDITION_PARTLYCLOUDY, 1, -13, -14, 25],
-                    [ATTR_CONDITION_SUNNY, 0, -18, -22, 70],
-                    [ATTR_CONDITION_SUNNY, 0.1, -23, -23, 90],
-                    [ATTR_CONDITION_SNOWY, 4, -19, -20, 40],
-                    [ATTR_CONDITION_SUNNY, 0.3, -14, -19, 0],
-                    [ATTR_CONDITION_SUNNY, 0, -9, -12, 0],
-                ],
-                [
-                    [ATTR_CONDITION_SUNNY, 2, -10, -15, 60],
-                    [ATTR_CONDITION_SUNNY, 1, -13, -14, 25],
-                    [ATTR_CONDITION_SUNNY, 0, -18, -22, 70],
-                    [ATTR_CONDITION_SUNNY, 0.1, -23, -23, 90],
-                    [ATTR_CONDITION_SUNNY, 4, -19, -20, 40],
-                    [ATTR_CONDITION_SUNNY, 0.3, -14, -19, 0],
-                    [ATTR_CONDITION_SUNNY, 0, -9, -12, 0],
-                ],
-                [
-                    [ATTR_CONDITION_SNOWY, 2, -10, -15, 60, True],
-                    [ATTR_CONDITION_PARTLYCLOUDY, 1, -13, -14, 25, False],
-                    [ATTR_CONDITION_SUNNY, 0, -18, -22, 70, True],
-                    [ATTR_CONDITION_SUNNY, 0.1, -23, -23, 90, False],
-                    [ATTR_CONDITION_SNOWY, 4, -19, -20, 40, True],
-                    [ATTR_CONDITION_SUNNY, 0.3, -14, -19, 0, False],
-                    [ATTR_CONDITION_SUNNY, 0, -9, -12, 0, True],
-                ],
+                NORTH_DAILY_FORECAST,
+                NORTH_HOURLY_FORECAST,
+                NORTH_TWICE_DAILY_FORECAST,
             ),
         ]
     )
 
 
 class DemoWeather(WeatherEntity):
-    """Representation of a weather condition."""
+    """Representation of a weather condition.
 
-    _attr_attribution = "Powered by Home Assistant"
-    _attr_should_poll = False
+    This class handles the simulation of weather data, including multiple
+    forecast types (daily, hourly, twice-daily) and unit conversions.
+    """
+
+    # 3. REENGINEERING: Added Type Hints to class attributes
+    _attr_attribution: str = "Powered by Home Assistant"
+    _attr_should_poll: bool = False
 
     def __init__(
         self,

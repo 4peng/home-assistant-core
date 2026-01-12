@@ -67,7 +67,14 @@ STORAGE_FIELDS: VolDictType = {
 
 
 def _cv_input_text(config: dict[str, Any]) -> dict[str, Any]:
-    """Configure validation helper for input box (voluptuous)."""
+    """Configure validation helper for input box (voluptuous).
+
+    Args:
+        config (dict[str, Any]): Config to validate.
+
+    Returns:
+        dict[str, Any]: Validated config.
+    """
     minimum: int = config[CONF_MIN]
     maximum: int = config[CONF_MAX]
     if minimum > maximum:
@@ -113,7 +120,15 @@ RELOAD_SERVICE_SCHEMA = vol.Schema({})
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up an input text."""
+    """Set up an input text.
+
+    Args:
+        hass (HomeAssistant): Home Assistant instance.
+        config (ConfigType): Configuration.
+
+    Returns:
+        bool: Whether setup was successful.
+    """
     component = EntityComponent[InputText](_LOGGER, DOMAIN, hass)
 
     id_manager = collection.IDManager()
@@ -172,18 +187,40 @@ class InputTextStorageCollection(collection.DictStorageCollection):
     CREATE_UPDATE_SCHEMA = vol.Schema(vol.All(STORAGE_FIELDS, _cv_input_text))
 
     async def _process_create_data(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Validate the config is valid."""
+        """Validate the config is valid.
+
+        Args:
+            data (dict[str, Any]): Data to validate.
+
+        Returns:
+            dict[str, Any]: Validated data.
+        """
         return self.CREATE_UPDATE_SCHEMA(data)  # type: ignore[no-any-return]
 
     @callback
     def _get_suggested_id(self, info: dict[str, Any]) -> str:
-        """Suggest an ID based on the config."""
+        """Suggest an ID based on the config.
+
+        Args:
+            info (dict[str, Any]): Configuration info.
+
+        Returns:
+            str: Suggested ID.
+        """
         return info[CONF_NAME]  # type: ignore[no-any-return]
 
     async def _update_data(
         self, item: dict[str, Any], update_data: dict[str, Any]
     ) -> dict[str, Any]:
-        """Return a new updated data object."""
+        """Return a new updated data object.
+
+        Args:
+            item (dict[str, Any]): Current item.
+            update_data (dict[str, Any]): New data to update.
+
+        Returns:
+            dict[str, Any]: Updated data object.
+        """
         update_data = self.CREATE_UPDATE_SCHEMA(update_data)
         return {CONF_ID: item[CONF_ID]} | update_data
 
@@ -200,20 +237,38 @@ class InputText(collection.CollectionEntity, RestoreEntity):
     editable: bool
 
     def __init__(self, config: ConfigType) -> None:
-        """Initialize a text input."""
+        """Initialize a text input.
+
+        Args:
+            config (ConfigType): Configuration.
+        """
         self._config = config
         self._current_value = config.get(CONF_INITIAL)
 
     @classmethod
     def from_storage(cls, config: ConfigType) -> Self:
-        """Return entity instance initialized from storage."""
+        """Return entity instance initialized from storage.
+
+        Args:
+            config (ConfigType): Configuration.
+
+        Returns:
+            Self: InputText entity.
+        """
         input_text: Self = cls(config)
         input_text.editable = True
         return input_text
 
     @classmethod
     def from_yaml(cls, config: ConfigType) -> Self:
-        """Return entity instance initialized from yaml."""
+        """Return entity instance initialized from yaml.
+
+        Args:
+            config (ConfigType): Configuration.
+
+        Returns:
+            Self: InputText entity.
+        """
         input_text: Self = cls(config)
         input_text.entity_id = f"{DOMAIN}.{config[CONF_ID]}"
         input_text.editable = False
@@ -221,42 +276,74 @@ class InputText(collection.CollectionEntity, RestoreEntity):
 
     @property
     def name(self) -> str | None:
-        """Return the name of the text input entity."""
+        """Return the name of the text input entity.
+
+        Returns:
+            str | None: Name of the entity.
+        """
         return self._config.get(CONF_NAME)
 
     @property
     def icon(self) -> str | None:
-        """Return the icon to be used for this entity."""
+        """Return the icon to be used for this entity.
+
+        Returns:
+            str | None: Icon of the entity.
+        """
         return self._config.get(CONF_ICON)
 
     @property
     def _maximum(self) -> int:
-        """Return max len of the text."""
+        """Return max len of the text.
+
+        Returns:
+            int: Max length.
+        """
         return self._config[CONF_MAX]  # type: ignore[no-any-return]
 
     @property
     def _minimum(self) -> int:
-        """Return min len of the text."""
+        """Return min len of the text.
+
+        Returns:
+            int: Min length.
+        """
         return self._config[CONF_MIN]  # type: ignore[no-any-return]
 
     @property
     def state(self) -> str | None:
-        """Return the state of the component."""
+        """Return the state of the component.
+
+        Returns:
+            str | None: Current state.
+        """
         return self._current_value
 
     @property
     def unit_of_measurement(self) -> str | None:
-        """Return the unit the value is expressed in."""
+        """Return the unit the value is expressed in.
+
+        Returns:
+            str | None: Unit of measurement.
+        """
         return self._config.get(CONF_UNIT_OF_MEASUREMENT)
 
     @property
     def unique_id(self) -> str:
-        """Return unique id for the entity."""
+        """Return unique id for the entity.
+
+        Returns:
+            str: Unique ID.
+        """
         return self._config[CONF_ID]  # type: ignore[no-any-return]
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return the state attributes."""
+        """Return the state attributes.
+
+        Returns:
+            dict[str, Any]: State attributes.
+        """
         return {
             ATTR_EDITABLE: self.editable,
             ATTR_MIN: self._minimum,
@@ -279,7 +366,11 @@ class InputText(collection.CollectionEntity, RestoreEntity):
             self._current_value = value
 
     async def async_set_value(self, value: str) -> None:
-        """Select new value."""
+        """Select new value.
+
+        Args:
+            value (str): New value.
+        """
         if len(value) < self._minimum or len(value) > self._maximum:
             _LOGGER.warning(
                 "Invalid value: %s (length range %s - %s)",
@@ -292,6 +383,10 @@ class InputText(collection.CollectionEntity, RestoreEntity):
         self.async_write_ha_state()
 
     async def async_update_config(self, config: ConfigType) -> None:
-        """Handle when the config is updated."""
+        """Handle when the config is updated.
+
+        Args:
+            config (ConfigType): New configuration.
+        """
         self._config = config
         self.async_write_ha_state()

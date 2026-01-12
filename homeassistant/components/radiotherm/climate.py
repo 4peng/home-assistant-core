@@ -28,6 +28,16 @@ from .entity import RadioThermostatEntity
 
 ATTR_FAN_ACTION = "fan_action"
 
+# Thermostat JSON data dictionary keys
+TSTAT_KEY_TEMP = "temp"
+TSTAT_KEY_FAN_MODE = "fmode"
+TSTAT_KEY_FAN_STATE = "fstate"
+TSTAT_KEY_HVAC_MODE = "tmode"
+TSTAT_KEY_HVAC_STATE = "tstate"
+TSTAT_KEY_TARGET_COOL = "t_cool"
+TSTAT_KEY_TARGET_HEAT = "t_heat"
+TSTAT_KEY_PROGRAM_MODE = "program_mode"
+
 PRESET_HOLIDAY = "holiday"
 
 PRESET_ALTERNATE = "alternate"
@@ -144,30 +154,30 @@ class RadioThermostat(RadioThermostatEntity, ClimateEntity):
         data = self.data.tstat
         if isinstance(self.device, radiotherm.thermostat.CT80):
             self._attr_current_humidity = self.data.humidity
-            self._attr_preset_mode = CODE_TO_PRESET_MODE[data["program_mode"]]
+            self._attr_preset_mode = CODE_TO_PRESET_MODE[data[TSTAT_KEY_PROGRAM_MODE]]
         # Map thermostat values into various STATE_ flags.
-        self._attr_current_temperature = data["temp"]
-        self._attr_fan_mode = CODE_TO_FAN_MODE[data["fmode"]]
+        self._attr_current_temperature = data[TSTAT_KEY_TEMP]
+        self._attr_fan_mode = CODE_TO_FAN_MODE[data[TSTAT_KEY_FAN_MODE]]
         self._attr_extra_state_attributes = {
-            ATTR_FAN_ACTION: CODE_TO_FAN_STATE[data["fstate"]]
+            ATTR_FAN_ACTION: CODE_TO_FAN_STATE[data[TSTAT_KEY_FAN_STATE]]
         }
-        self._attr_hvac_mode = CODE_TO_TEMP_MODE[data["tmode"]]
+        self._attr_hvac_mode = CODE_TO_TEMP_MODE[data[TSTAT_KEY_HVAC_MODE]]
         if self.hvac_mode == HVACMode.OFF:
             self._attr_hvac_action = None
         else:
-            self._attr_hvac_action = CODE_TO_TEMP_STATE[data["tstate"]]
+            self._attr_hvac_action = CODE_TO_TEMP_STATE[data[TSTAT_KEY_HVAC_STATE]]
         if self.hvac_mode == HVACMode.COOL:
-            self._attr_target_temperature = data["t_cool"]
+            self._attr_target_temperature = data[TSTAT_KEY_TARGET_COOL]
         elif self.hvac_mode == HVACMode.HEAT:
-            self._attr_target_temperature = data["t_heat"]
+            self._attr_target_temperature = data[TSTAT_KEY_TARGET_HEAT]
         elif self.hvac_mode == HVACMode.AUTO:
             # This doesn't really work - tstate is only set if the HVAC is
             # active. If it's idle, we don't know what to do with the target
             # temperature.
             if self.hvac_action == HVACAction.COOLING:
-                self._attr_target_temperature = data["t_cool"]
+                self._attr_target_temperature = data[TSTAT_KEY_TARGET_COOL]
             elif self.hvac_action == HVACAction.HEATING:
-                self._attr_target_temperature = data["t_heat"]
+                self._attr_target_temperature = data[TSTAT_KEY_TARGET_HEAT]
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""

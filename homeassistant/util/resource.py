@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+try:
+    import resource
+except ImportError:
+    resource = None  # type: ignore[assignment]
 from typing import Final
 
 try:

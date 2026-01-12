@@ -5,17 +5,14 @@ import asyncio
 from collections.abc import Sequence
 import logging
 import os
+import sys  
 from typing import TYPE_CHECKING
-
 from homeassistant import runner
 from homeassistant.auth import auth_manager_from_config
 from homeassistant.auth.providers import homeassistant as hass_auth
 from homeassistant.config import get_default_config_dir
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
-
-# mypy: allow-untyped-calls, allow-untyped-defs
-
 
 def run(args: Sequence[str] | None) -> None:
     """Handle Home Assistant auth provider script."""
@@ -61,7 +58,6 @@ async def run_command(args: argparse.Namespace) -> None:
     await provider.async_initialize()
     await args.func(hass, provider, args)
 
-    # Triggers save on used storage helpers with delay (core auth)
     logging.getLogger("homeassistant.core").setLevel(logging.WARNING)
 
     await hass.async_stop()
@@ -91,12 +87,11 @@ async def add_user(
     try:
         provider.data.add_auth(args.username, args.password)
     except hass_auth.InvalidUser:
-        print("Username already exists!")
+        sys.stderr.write("Username already exists!\n")
         return
 
-    # Save username/password
     await provider.data.async_save()
-    print("Auth created")
+    sys.stdout.write("Auth created\n")
 
 
 async def validate_login(
@@ -107,9 +102,9 @@ async def validate_login(
         assert provider.data
     try:
         provider.data.validate_login(args.username, args.password)
-        print("Auth valid")
+        sys.stdout.write("Auth valid\n")
     except hass_auth.InvalidAuth:
-        print("Auth invalid")
+        sys.stderr.write("Auth invalid\n")
 
 
 async def change_password(
@@ -121,6 +116,6 @@ async def change_password(
     try:
         provider.data.change_password(args.username, args.new_password)
         await provider.data.async_save()
-        print("Password changed")
+        sys.stdout.write("Password changed\n")
     except hass_auth.InvalidUser:
-        print("User not found")
+        sys.stderr.write("User not found\n")
