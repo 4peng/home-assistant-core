@@ -10,6 +10,12 @@ except ImportError:
     resource = None  # type: ignore[assignment]
 from typing import Final
 
+try:
+    import resource
+except ImportError:
+    # resource module is only available on Unix systems
+    resource = None  # type: ignore[assignment]
+
 _LOGGER = logging.getLogger(__name__)
 
 # Default soft file descriptor limit to set
@@ -19,7 +25,7 @@ DEFAULT_SOFT_FILE_LIMIT: Final = 2048
 def set_open_file_descriptor_limit() -> None:
     """Set the maximum open file descriptor soft limit."""
     if resource is None:
-        return
+        return  # type: ignore[unreachable]
 
     try:
         # Check environment variable first, then use default

@@ -28,6 +28,12 @@ CONF_ALL_DAYS: Final = {
 
 ATTR_NEXT_EVENT: Final = "next_event"
 
+# Override mechanism attributes
+ATTR_OVERRIDE_ACTIVE: Final = "override_active"
+ATTR_OVERRIDE_STATE: Final = "override_state"
+ATTR_OVERRIDE_UNTIL: Final = "override_until"
+ATTR_OVERRIDE_REASON: Final = "override_reason"
+
 WEEKDAY_TO_CONF: Final = {
     0: CONF_MONDAY,
     1: CONF_TUESDAY,
@@ -39,3 +45,13 @@ WEEKDAY_TO_CONF: Final = {
 }
 
 SERVICE_GET: Final = "get_schedule"
+
+# Override mechanism services
+SERVICE_SET_OVERRIDE: Final = "set_override"
+SERVICE_CLEAR_OVERRIDE: Final = "clear_override"
+
+# Override mechanism configuration keys
+CONF_STATE: Final = "state"
+CONF_UNTIL: Final = "until"
+CONF_DURATION: Final = "duration"
+CONF_REASON: Final = "reason"

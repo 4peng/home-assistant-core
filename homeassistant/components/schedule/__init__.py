@@ -44,13 +44,23 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     ATTR_NEXT_EVENT,
+    ATTR_OVERRIDE_ACTIVE,
+    ATTR_OVERRIDE_REASON,
+    ATTR_OVERRIDE_STATE,
+    ATTR_OVERRIDE_UNTIL,
     CONF_ALL_DAYS,
     CONF_DATA,
+    CONF_DURATION,
     CONF_FROM,
+    CONF_REASON,
+    CONF_STATE,
     CONF_TO,
+    CONF_UNTIL,
     DOMAIN,
     LOGGER,
+    SERVICE_CLEAR_OVERRIDE,
     SERVICE_GET,
+    SERVICE_SET_OVERRIDE,
     WEEKDAY_TO_CONF,
 )
 
@@ -218,6 +228,26 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         async_get_schedule_service,
         supports_response=SupportsResponse.ONLY,
     )
+
+    # === ADD OVERRIDE SERVICES HERE ===
+    component.async_register_entity_service(
+        SERVICE_SET_OVERRIDE,
+        {
+            vol.Required(CONF_STATE): vol.In([STATE_ON, STATE_OFF]),
+            vol.Optional(CONF_UNTIL): cv.datetime,
+            vol.Optional(CONF_DURATION): cv.time_period,
+            vol.Optional(CONF_REASON): cv.string,
+        },
+        "async_set_override",
+    )
+
+    component.async_register_entity_service(
+        SERVICE_CLEAR_OVERRIDE,
+        {},
+        "async_clear_override",
+    )
+    # === END OVERRIDE SERVICES ===
+
     await component.async_setup(config)
 
     return True
@@ -279,6 +309,14 @@ class Schedule(CollectionEntity):
             self._entity_component_unrecorded_attributes | self._unrecorded_attributes
         )
 
+        # === ADD OVERRIDE ATTRIBUTES HERE ===
+        # Override mechanism state
+        self._override_active: bool = False
+        self._override_state: Literal["on", "off"] | None = None
+        self._override_until: datetime | None = None
+        self._override_reason: str | None = None
+        # === END OVERRIDE ATTRIBUTES ===
+
     @classmethod
     def from_storage(cls, config: ConfigType) -> Schedule:
         """Return entity instance initialized from storage."""
@@ -319,6 +357,52 @@ class Schedule(CollectionEntity):
     def _update(self, _: datetime | None = None) -> None:
         """Update the states of the schedule."""
         now = dt_util.now()
+
+        # === CHECK FOR ACTIVE OVERRIDE FIRST ===
+        if self._override_active:
+            # Check if override has expired
+            if self._override_until and now >= self._override_until:
+                # Override expired, clear it and continue with normal schedule
+                self._override_active = False
+                self._override_state = None
+                self._override_until = None
+                self._override_reason = None
+            else:
+                # Override still active, use override state
+                if self._override_state is not None:
+                    self._attr_state = self._override_state
+
+                # Update attributes with override info
+                self._attr_extra_state_attributes = {
+                    ATTR_OVERRIDE_ACTIVE: self._override_active,
+                    ATTR_OVERRIDE_STATE: self._override_state,
+                    ATTR_OVERRIDE_UNTIL: self._override_until,
+                }
+
+                if self._override_reason:
+                    self._attr_extra_state_attributes[ATTR_OVERRIDE_REASON] = (
+                        self._override_reason
+                    )
+
+                # Add next_event as when override expires (or None if indefinite)
+                self._attr_extra_state_attributes[ATTR_NEXT_EVENT] = (
+                    self._override_until
+                )
+
+                self.async_write_ha_state()
+
+                # Schedule next update when override expires
+                if self._override_until:
+                    self._unsub_update = async_track_point_in_utc_time(
+                        self.hass,
+                        self._update,
+                        self._override_until,
+                    )
+
+                return
+        # === END OVERRIDE CHECK ===
+
+        # Normal schedule logic continues below (existing code)
         todays_schedule = self._config.get(WEEKDAY_TO_CONF[now.weekday()], [])
 
         # Determine current schedule state
@@ -375,6 +459,7 @@ class Schedule(CollectionEntity):
 
         self._attr_extra_state_attributes = {
             ATTR_NEXT_EVENT: next_event,
+            ATTR_OVERRIDE_ACTIVE: False,  # No override active in normal mode
         }
 
         if current_data:
@@ -389,6 +474,55 @@ class Schedule(CollectionEntity):
                 self._update,
                 next_event,
             )
+
+    async def async_set_override(
+        self,
+        state: Literal["on", "off"],
+        until: datetime | None = None,
+        duration: timedelta | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Set an override for the schedule.
+
+        This allows manual control to force the schedule to a specific state
+        for a limited time, useful for holidays, sick days, or special events.
+        """
+        # Calculate override expiration time
+        if until:
+            # Explicit end time provided
+            override_until = until
+        elif duration:
+            # Duration provided, calculate end time
+            override_until = dt_util.now() + duration
+        else:
+            # No expiration specified, indefinite override
+            override_until = None
+
+        # Set override state
+        self._override_active = True
+        self._override_state = state
+        self._override_until = override_until
+        self._override_reason = reason
+
+        # Clean up existing update listener
+        self._clean_up_listener()
+
+        # Trigger immediate update to apply override
+        self._update()
+
+    async def async_clear_override(self) -> None:
+        """Clear any active override and return to normal schedule."""
+        # Clear override state
+        self._override_active = False
+        self._override_state = None
+        self._override_until = None
+        self._override_reason = None
+
+        # Clean up existing update listener
+        self._clean_up_listener()
+
+        # Trigger immediate update to return to normal schedule
+        self._update()
 
     def all_custom_data_keys(self) -> frozenset[str]:
         """Return the set of all currently used custom data attribute keys."""
